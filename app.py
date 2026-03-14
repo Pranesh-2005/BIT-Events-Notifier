@@ -35,10 +35,11 @@ TOKEN_FILE = "token.pkl"
 STATE_FILE = "state.json"
 NEW_EVENTS_FILE = "new_events.json"
 PAGE1_LOG_FILE = "page1_logs.json"
+PENDING_EVENTS_FILE = "pending_events.json"
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
-MAX_PAGES = 50
+MAX_PAGES = 5
 REQUEST_TIMEOUT = 20
 
 
@@ -255,6 +256,17 @@ def save_state(latest_id):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=2)
 
+
+def load_pending_events():
+    try:
+        with open(PENDING_EVENTS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_pending_events(data):
+    with open(PENDING_EVENTS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 def save_new_events(events):
     """Save new events to file"""
@@ -561,8 +573,19 @@ def check_events():
         print("📍 Last known ID:", old_id)
 
         new_events = fetch_new_events(old_id)
+        pending = load_pending_events()
+        events_to_send = []
+        page1_events = fetch_latest()
 
-        if not new_events:
+        for res in page1_events:
+            ev = parse_event(res)
+            eid = str(ev["id"])
+
+            if eid in pending and ev.get("status") == "Active":
+                print("🔥 Pending event became active:", ev.get("event_name"))
+                events_to_send.append(ev)
+                del pending[eid]
+        if not new_events and not events_to_send:
             print("⏳ No new events added")
             return "⏳ No new events found"
 
@@ -577,8 +600,29 @@ def check_events():
         save_state(latest["id"])
 
         # Send notifications to users
-        return send_notifications_for_events(new_events)
+        for ev in new_events:
 
+            status = ev.get("status")
+            eid = str(ev["id"])
+
+            if status == "Not-Active":
+                pending[eid] = ev
+
+            elif status == "Active":
+
+                if eid in pending:
+                    print("🔥 Event became active:", ev.get("event_name"))
+                    events_to_send.append(ev)
+                    del pending[eid]
+
+                else:
+                    events_to_send.append(ev)
+
+        # SAVE pending events
+        events_to_send = list({e["id"]: e for e in events_to_send}.values())
+        save_pending_events(pending)
+        return send_notifications_for_events(events_to_send)
+    
     except Exception as e:
         error_msg = f"❌ Event check error: {e}"
         print(error_msg)
